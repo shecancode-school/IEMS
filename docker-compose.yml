@@ -1,0 +1,28 @@
+services:
+  db:
+    image: mongo:7
+    container_name: igire-mongo
+    restart: unless-stopped
+    # Prisma requires MongoDB to run as a replica set (it uses transactions).
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    volumes:
+      - igire_mongodata:/data/db
+    healthcheck:
+      # Idempotently initiate the single-node replica set, then report healthy
+      # once it has a PRIMARY. This lets `docker compose up -d` be enough for dev.
+      test: >-
+        mongosh --quiet --port 27017 --eval "
+          try { rs.status().ok }
+          catch (e) {
+            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] })
+          }
+        "
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  igire_mongodata:
