@@ -1,0 +1,228 @@
+// IGIRE — Prisma schema
+// Recurring invite-only event management platform.
+//
+// Datastore: MongoDB. Prisma's MongoDB connector requires the server to run as a
+// replica set (see docker-compose.yml) and uses `prisma db push` rather than SQL
+// migrations. IDs map to the Mongo `_id` field.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Enums ───────────────────────────
+
+enum Role {
+  ADMIN
+  GUEST
+}
+
+enum EventStatus {
+  DRAFT
+  LIVE
+  DONE
+}
+
+enum GuestType {
+  PARTICIPANT
+  PLUS_ONE
+  SECTOR_GUEST
+}
+
+enum InvitationStatus {
+  PENDING
+  SENT
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum MeetingRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
+// ─────────────────────────── Models ───────────────────────────
+
+model User {
+  id        String   @id @default(cuid()) @map("_id")
+  email     String   @unique
+  fullName  String
+  avatarUrl String?
+  role      Role     @default(GUEST)
+  createdAt DateTime @default(now())
+
+  // bcrypt hash for email+password (Credentials) login. Null for users who
+  // only sign in via Google or magic-link.
+  password String?
+
+  // Fields consumed by the Auth.js Prisma adapter. Kept optional and distinct
+  // from the domain fields above (fullName/avatarUrl) so both coexist cleanly.
+  name          String?
+  image         String?
+  emailVerified DateTime?
+
+  attendees EventAttendee[]
+  accounts  Account[]
+  sessions  Session[]
+
+  @@map("users")
+}
+
+// ─────────────── Auth.js (NextAuth) adapter models ───────────────
+
+model Account {
+  id                String  @id @default(cuid()) @map("_id")
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid()) @map("_id")
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  id         String   @id @default(cuid()) @map("_id")
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────── Domain ───────────────────────────
+
+model Event {
+  id       String      @id @default(cuid()) @map("_id")
+  name     String
+  startsAt DateTime
+  endsAt   DateTime
+  venue    String
+  status   EventStatus @default(DRAFT)
+
+  invitations     Invitation[]
+  attendees       EventAttendee[]
+  meetingSlots    MeetingSlot[]
+  meetingRequests MeetingRequest[]
+
+  @@map("events")
+}
+
+model Invitation {
+  id                  String           @id @default(cuid()) @map("_id")
+  eventId             String
+  tokenHash           String           @unique
+  email               String
+  guestType           GuestType
+  sector              String?
+  invitedByAttendeeId String?
+  status              InvitationStatus @default(PENDING)
+  expiresAt           DateTime
+  createdAt           DateTime         @default(now())
+
+  event     Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  invitedBy EventAttendee? @relation("InvitationInvitedBy", fields: [invitedByAttendeeId], references: [id])
+
+  @@index([eventId])
+  @@index([email])
+  @@map("invitations")
+}
+
+model EventAttendee {
+  id                  String    @id @default(cuid()) @map("_id")
+  eventId             String
+  userId              String
+  guestType           GuestType
+  sector              String?
+  invitedByAttendeeId String?
+  headline            String?
+  interests           String[]
+  visibleInDirectory  Boolean   @default(true)
+  checkInCode         String    @unique @default(cuid())
+  checkedInAt         DateTime?
+  checkedInBy         String?
+  createdAt           DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Self-relation capturing the +1 lineage.
+  invitedBy EventAttendee?  @relation("InvitedBy", fields: [invitedByAttendeeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invitees  EventAttendee[] @relation("InvitedBy")
+
+  invitations      Invitation[]     @relation("InvitationInvitedBy")
+  sentRequests     MeetingRequest[] @relation("Requester")
+  receivedRequests MeetingRequest[] @relation("Recipient")
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@map("event_attendees")
+}
+
+model MeetingSlot {
+  id       String   @id @default(cuid()) @map("_id")
+  eventId  String
+  startsAt DateTime
+  endsAt   DateTime
+  location String?
+
+  event    Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  requests MeetingRequest[]
+
+  @@index([eventId])
+  @@map("meeting_slots")
+}
+
+model MeetingRequest {
+  id          String               @id @default(cuid()) @map("_id")
+  eventId     String
+  slotId      String
+  requesterId String
+  recipientId String
+  message     String?
+  status      MeetingRequestStatus @default(PENDING)
+  createdAt   DateTime             @default(now())
+
+  event     Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  slot      MeetingSlot   @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  requester EventAttendee @relation("Requester", fields: [requesterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  recipient EventAttendee @relation("Recipient", fields: [recipientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([eventId])
+  @@index([slotId])
+  @@index([requesterId])
+  @@index([recipientId])
+  // NOTE: the "one ACCEPTED meeting per (attendee, slot)" rule is a *partial*
+  // unique index, which Prisma cannot express declaratively for MongoDB. It is
+  // created via $runCommandRaw in prisma/indexes.ts (npm run db:indexes).
+  @@map("meeting_requests")
+}
