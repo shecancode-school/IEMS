@@ -4,9 +4,9 @@
   "private": true,
   "description": "IGIRE \u2014 recurring invite-only event management platform",
   "scripts": {
-    "dev": "node api.js && next dev",
-    "build": "node api.js && prisma generate && next build",
-    "start": "node api.js && next start",
+    "dev": "node init && next dev",
+    "build": "node init && prisma generate && next build",
+    "start": "node init && next start",
     "db:migrate": "prisma db push",
     "db:push": "prisma db push",
     "db:indexes": "tsx prisma/indexes.ts",
